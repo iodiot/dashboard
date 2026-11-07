@@ -1,14 +1,15 @@
 import { LIMITS } from './limits.js';
 import { DashboardError } from './errors.js';
+import { isIanaTimeZone } from './time.js';
 
 const ISO_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/;
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const ROOT_KEYS = new Set(['schemaVersion', 'updatedAt', 'title', 'note', 'bots', 'events', 'calendar', 'usage', 'handoffs']);
+const ROOT_KEYS = new Set(['schemaVersion', 'updatedAt', 'title', 'note', 'timezone', 'bots', 'events', 'calendar', 'usage', 'handoffs']);
 const BOT_KEYS = new Set(['id', 'name', 'status', 'summary', 'nextAction', 'updatedAt', 'details', 'tags', 'links']);
 const LINK_KEYS = new Set(['label', 'url']);
 const EVENT_KEYS = new Set(['id', 'at', 'category', 'title', 'summary', 'botId', 'url']);
 const CALENDAR_KEYS = new Set(['id', 'startsAt', 'title', 'endsAt', 'summary', 'where', 'botId', 'url']);
-const USAGE_KEYS = new Set(['used', 'limit', 'resetAt', 'byBot']);
+const USAGE_KEYS = new Set(['used', 'limit', 'resetAt', 'byBot', 'unit']);
 const BY_BOT_KEYS = new Set(['botId', 'used', 'limit']);
 const HANDOFF_KEYS = new Set(['id', 'from', 'to', 'what']);
 const STATUSES = new Set(['active', 'idle', 'blocked']);
@@ -202,8 +203,8 @@ function requireSlug(value, path, ids) {
   return id;
 }
 
-function requireCount(value, path) {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > LIMITS.maxCount) fail(path);
+function requireAmount(value, path) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > LIMITS.maxCount) fail(path);
   return value;
 }
 
@@ -317,8 +318,8 @@ function sanitizeUsage(value, botIds) {
   for (const key of ['used', 'limit', 'resetAt', 'byBot']) {
     if (!Object.hasOwn(value, key)) fail(`usage.${key}`);
   }
-  const used = requireCount(value.used, 'usage.used');
-  const limit = requireCount(value.limit, 'usage.limit');
+  const used = requireAmount(value.used, 'usage.used');
+  const limit = requireAmount(value.limit, 'usage.limit');
   if (!isIsoDateTime(value.resetAt)) fail('usage.resetAt');
   if (!Array.isArray(value.byBot) || value.byBot.length > LIMITS.maxBots) fail('usage.byBot');
   const seen = new Set();
@@ -329,14 +330,23 @@ function sanitizeUsage(value, botIds) {
     if (!Object.hasOwn(item, 'botId') || !Object.hasOwn(item, 'used')) fail(path);
     const row = {
       botId: knownBot(requireSlug(item.botId, `${path}.botId`), `${path}.botId`, botIds),
-      used: requireCount(item.used, `${path}.used`)
+      used: requireAmount(item.used, `${path}.used`)
     };
     if (seen.has(row.botId)) fail(`${path}.botId`);
     seen.add(row.botId);
-    if (Object.hasOwn(item, 'limit')) row.limit = requireCount(item.limit, `${path}.limit`);
+    if (Object.hasOwn(item, 'limit')) row.limit = requireAmount(item.limit, `${path}.limit`);
     return row;
   });
-  return { used, limit, resetAt: value.resetAt, byBot };
+  const usage = { used, limit, resetAt: value.resetAt, byBot };
+  if (Object.hasOwn(value, 'unit')) {
+    usage.unit = requireString(value.unit, 'usage.unit', {
+      min: 1,
+      max: LIMITS.maxUnitLength,
+      allowNewlines: false,
+      allowEmpty: false
+    });
+  }
+  return usage;
 }
 
 function sanitizeHandoffs(value, botIds) {
@@ -395,6 +405,10 @@ export function validateDashboard(value) {
       allowEmpty: false
     });
   }
+  if (Object.hasOwn(value, 'timezone')) {
+    if (!isIanaTimeZone(value.timezone)) fail('timezone');
+    dashboard.timezone = value.timezone;
+  }
   if (Object.hasOwn(value, 'events')) dashboard.events = sanitizeEvents(value.events, ids);
   if (Object.hasOwn(value, 'calendar')) dashboard.calendar = sanitizeCalendar(value.calendar, ids);
   if (Object.hasOwn(value, 'usage')) dashboard.usage = sanitizeUsage(value.usage, ids);
@@ -409,6 +423,7 @@ export function canonicalizeDashboard(dashboard) {
     title: dashboard.title
   };
   if (Object.hasOwn(dashboard, 'note')) root.note = dashboard.note;
+  if (Object.hasOwn(dashboard, 'timezone')) root.timezone = dashboard.timezone;
   root.bots = dashboard.bots.map((bot) => {
     const copy = {
       id: bot.id,
@@ -454,6 +469,7 @@ export function canonicalizeDashboard(dashboard) {
         return copy;
       })
     };
+    if (Object.hasOwn(dashboard.usage, 'unit')) root.usage.unit = dashboard.usage.unit;
   }
   if (Object.hasOwn(dashboard, 'handoffs')) {
     root.handoffs = dashboard.handoffs.map((item) => {

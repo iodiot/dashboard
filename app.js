@@ -3,6 +3,7 @@ import { DATA_URL } from './src/data-url.js';
 import { loadEncryptedDashboard } from './src/load.js';
 import { openDashboard } from './src/open.js';
 import { normalizeHttpUrl } from './src/schema.js';
+import { localTimeZone, upcomingDays, overlapsCivilDay } from './src/time.js';
 
 const app = document.querySelector('#app');
 const titleEl = document.querySelector('#title');
@@ -25,7 +26,8 @@ const view = {
   botStatus: 'all',
   eventQuery: '',
   eventCategory: 'all',
-  eventLimit: 10
+  eventLimit: 10,
+  calendarPage: 0
 };
 
 const TABS = [
@@ -52,17 +54,8 @@ function resetView() {
   view.eventQuery = '';
   view.eventCategory = 'all';
   view.eventLimit = 10;
+  view.calendarPage = 0;
 }
-
-const STAMP = new Intl.DateTimeFormat('en-US', {
-  timeZone: 'UTC',
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-  hour: '2-digit',
-  minute: '2-digit',
-  hourCycle: 'h23'
-});
 
 const STATUS_LABEL = {
   active: 'Active',
@@ -82,10 +75,57 @@ function setState(phase) {
   if (mainEl) mainEl.setAttribute('aria-busy', phase === 'loading' || phase === 'unlocking' ? 'true' : 'false');
 }
 
-function formatStamp(iso) {
+function zoneOf(dashboard) {
+  return dashboard && dashboard.timezone ? dashboard.timezone : localTimeZone();
+}
+
+function formatStamp(iso, timeZone = zoneOf(state.dashboard)) {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return `${STAMP.format(date)} UTC`;
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+    timeZoneName: 'short'
+  }).format(date);
+}
+
+function formatClock(iso, timeZone) {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  }).format(new Date(iso));
+}
+
+function formatCivilDay(key) {
+  const [year, month, day] = key.split('-').map(Number);
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'UTC',
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric'
+  }).format(new Date(Date.UTC(year, month - 1, day)));
+}
+
+function formatAmount(value) {
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 4 }).format(value);
+}
+
+function amountText(used, limit, unit) {
+  const suffix = unit ? ` ${unit}` : '';
+  if (limit > 0) return `${formatAmount(used)} / ${formatAmount(limit)}${suffix}`;
+  return `${formatAmount(used)}${suffix}`;
+}
+
+function rowAmountText(row, unit) {
+  if (row.limit === undefined || row.limit === 0) return amountText(row.used, 0, unit);
+  return amountText(row.used, row.limit, unit);
 }
 
 function clearDecrypted() {
@@ -702,31 +742,39 @@ function renderEvents(dashboard) {
   return panel;
 }
 
-function utcDayStart(iso) {
-  const date = new Date(iso);
-  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
-}
-
 function renderCalendar(dashboard) {
   const panel = el('section', 'panel-block');
-  panel.append(el('h2', null, 'Calendar'), renderCaption('Three UTC days ending on the latest entry.'));
+  const zone = zoneOf(dashboard);
+  panel.append(el('h2', null, 'Calendar'), renderCaption('Three days from today. Times use the file time zone when one is set, otherwise this browser’s time zone.'));
   const items = listOf(dashboard, 'calendar');
+  const nav = el('div', 'cal-nav');
+  const previous = el('button', 'chip', 'Previous 3 days');
+  previous.type = 'button';
+  previous.addEventListener('click', () => {
+    view.calendarPage -= 1;
+    replacePanel();
+  });
+  const next = el('button', 'chip', 'Next 3 days');
+  next.type = 'button';
+  next.addEventListener('click', () => {
+    view.calendarPage += 1;
+    replacePanel();
+  });
+  nav.append(previous, next);
+  panel.append(nav);
   if (items.length === 0) {
     panel.append(renderEmpty('No calendar entries in this dashboard.'));
     return panel;
   }
-  const latest = Math.max(...items.map((item) => utcDayStart(item.startsAt)));
-  const days = [latest - 2 * 86400000, latest - 86400000, latest];
-  const inside = new Set(days);
+  const days = upcomingDays(zone, view.calendarPage);
   const grid = el('div', 'days');
-  const dayFormat = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' });
-  const timeFormat = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  let visible = 0;
   for (const day of days) {
     const column = el('section', 'day');
-    const heading = el('h3', null, dayFormat.format(new Date(day)));
-    column.append(heading);
-    const rows = items.filter((item) => utcDayStart(item.startsAt) === day)
+    column.append(el('h3', null, formatCivilDay(day)));
+    const rows = items.filter((item) => overlapsCivilDay(item, day, zone))
       .sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt));
+    visible += rows.length;
     if (rows.length === 0) column.append(el('p', 'muted', 'Nothing scheduled.'));
     const list = el('ul', 'day-list');
     for (const item of rows) {
@@ -734,8 +782,8 @@ function renderCalendar(dashboard) {
       const when = document.createElement('time');
       when.dateTime = item.startsAt;
       when.textContent = item.endsAt
-        ? `${timeFormat.format(new Date(item.startsAt))}–${timeFormat.format(new Date(item.endsAt))} UTC`
-        : `${timeFormat.format(new Date(item.startsAt))} UTC`;
+        ? `${formatClock(item.startsAt, zone)}–${formatClock(item.endsAt, zone)}`
+        : formatClock(item.startsAt, zone);
       row.append(when, el('h4', null, item.title));
       if (item.where) row.append(el('p', null, item.where));
       if (item.summary) row.append(el('p', 'summary', item.summary));
@@ -748,39 +796,27 @@ function renderCalendar(dashboard) {
     }
     if (rows.length > 0) column.append(list);
     grid.append(column);
-    void inside;
+  }
+  if (visible === 0) {
+    panel.append(renderEmpty(view.calendarPage === 0 ? 'No upcoming entries.' : 'Nothing scheduled in these three days.'));
   }
   panel.append(grid);
-  const outside = items.filter((item) => !days.includes(utcDayStart(item.startsAt)));
-  if (outside.length > 0) {
-    panel.append(el('p', 'caption', outside.length === 1 ? '1 entry is outside this window.' : `${outside.length} entries are outside this window.`));
-    const list = el('ul', 'outside');
-    for (const item of outside.sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt))) {
-      const row = el('li');
-      const time = document.createElement('time');
-      time.dateTime = item.startsAt;
-      time.textContent = formatStamp(item.startsAt);
-      row.append(time, el('span', null, ` ${item.title}`));
-      list.append(row);
-    }
-    panel.append(list);
-  }
   return panel;
 }
 
 function renderUsage(dashboard) {
   const panel = el('section', 'panel-block');
-  panel.append(el('h2', null, 'Usage'), renderCaption('Counts are uses from the decrypted file.'));
+  panel.append(el('h2', null, 'Usage'), renderCaption('Figures compare used with limit. A unit is shown only when the file supplies one.'));
   if (!dashboard.usage) {
     panel.append(renderEmpty('No usage figures in this dashboard.'));
     return panel;
   }
-  const { used, limit, resetAt, byBot } = dashboard.usage;
+  const { used, limit, resetAt, byBot, unit } = dashboard.usage;
   const figure = el('div', 'usage-top');
-  figure.append(renderDonut(used, limit));
+  figure.append(renderDonut(used, limit, unit));
   const copy = el('div');
   const summary = el('p', 'usage-figure');
-  summary.textContent = limit > 0 ? `${used} of ${limit} uses` : `${used} uses, no limit`;
+  summary.textContent = amountText(used, limit, unit);
   const reset = el('p', 'updated');
   reset.append(el('span', null, 'Resets '));
   const time = document.createElement('time');
@@ -788,7 +824,8 @@ function renderUsage(dashboard) {
   time.textContent = formatStamp(resetAt);
   reset.append(time);
   copy.append(summary, reset);
-  if (limit > 0 && used > limit) copy.append(el('p', 'over', 'Over the limit.'));
+  if (limit === 0) copy.append(el('p', 'muted', 'No limit.'));
+  else if (used > limit) copy.append(el('p', 'over', 'Over the limit.'));
   figure.append(copy);
   panel.append(figure);
   if (byBot.length === 0) {
@@ -801,7 +838,7 @@ function renderUsage(dashboard) {
     const item = el('li');
     const name = botLabel(dashboard, row.botId);
     const label = el('p', 'bar-label');
-    label.append(el('span', null, name), el('span', null, row.limit === undefined ? `${row.used} uses` : `${row.used} of ${row.limit} uses`));
+    label.append(el('span', null, name), el('span', null, rowAmountText(row, unit)));
     item.append(label, renderBar(name, row.used, scale));
     list.append(item);
   }
@@ -809,7 +846,7 @@ function renderUsage(dashboard) {
   return panel;
 }
 
-function renderDonut(used, limit) {
+function renderDonut(used, limit, unit) {
   const ratio = limit > 0 ? Math.min(1, used / limit) : 0;
   const radius = 42;
   const circumference = 2 * Math.PI * radius;
@@ -819,7 +856,7 @@ function renderDonut(used, limit) {
   svg.setAttribute('viewBox', '0 0 120 120');
   svg.setAttribute('class', 'donut');
   svg.setAttribute('role', 'img');
-  svg.setAttribute('aria-label', limit > 0 ? `${used} of ${limit} uses` : `${used} uses`);
+  svg.setAttribute('aria-label', limit > 0 ? `${formatAmount(used)} of ${formatAmount(limit)}${unit ? ` ${unit}` : ''}` : `${formatAmount(used)}${unit ? ` ${unit}` : ''}, no limit`);
   const track = document.createElementNS(SVG, 'circle');
   track.setAttribute('cx', '60');
   track.setAttribute('cy', '60');
@@ -848,7 +885,7 @@ function renderBar(name, used, scale) {
   svg.setAttribute('viewBox', '0 0 100 8');
   svg.setAttribute('class', 'bar');
   svg.setAttribute('role', 'img');
-  svg.setAttribute('aria-label', `${name}: ${used} uses`);
+  svg.setAttribute('aria-label', `${name}: ${formatAmount(used)}`);
   const track = document.createElementNS(SVG, 'rect');
   track.setAttribute('x', '0');
   track.setAttribute('y', '0');

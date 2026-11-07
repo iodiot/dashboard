@@ -32,5 +32,6 @@ export const LIMITS = {
   maxEventSummary: 500,
   maxHandoffWhat: 200,
   maxWhereLength: 120,
-  maxCount: 1_000_000_000_000
+  maxCount: 1_000_000_000_000,
+  maxUnitLength: 32
 };
