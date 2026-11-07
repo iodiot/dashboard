@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'sha256-/Haa7i6hgFVekkWDidgNpkNFdtRFTNGlEz4fcDG43Mg='; connect-src https://raw.githubusercontent.com; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; worker-src 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'sha256-nWf/uC7p3XgjMscNdGD8OBffrnvKB6HaRnQkgAquocM='; connect-src https://raw.githubusercontent.com; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; worker-src 'none'">
   <title>Dashboard</title>
   <meta name="description" content="Password-protected dashboard. Ciphertext is decrypted in this browser.">
   <style>:root {
@@ -88,7 +88,7 @@ body {
 .skip:focus { top: 12px; }
 
 .shell {
-  width: min(1040px, calc(100% - 32px));
+  width: min(1120px, calc(100% - 32px));
   margin: 0 auto;
   padding: 28px 0 36px;
 }
@@ -305,7 +305,7 @@ h2 {
 }
 
 .site-footer {
-  width: min(1040px, calc(100% - 32px));
+  width: min(1120px, calc(100% - 32px));
   margin: 0 auto 28px;
   color: var(--muted);
   font-size: 0.92rem;
@@ -319,12 +319,106 @@ h2 {
 }
 
 @media (max-width: 640px) {
-  .shell { width: min(1040px, calc(100% - 24px)); padding-top: 18px; }
+  .shell { width: min(1120px, calc(100% - 24px)); padding-top: 18px; }
   .top { grid-template-columns: auto 1fr; }
   #lock-slot { grid-column: 1 / -1; }
   #lock-slot .btn { width: 100%; }
-  .site-footer { width: min(1040px, calc(100% - 24px)); }
-}</style>
+  .site-footer { width: min(1120px, calc(100% - 24px)); }
+}
+.shell { max-width: 1120px; }
+.workspace { display: grid; gap: 16px; }
+.tablist {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 8px 0 12px;
+  background: var(--bg-2);
+}
+.tab, .chip {
+  font: inherit;
+  min-height: 44px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  padding: 0 14px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tab[aria-selected="true"], .chip.is-on { background: var(--ink); color: var(--bg-2); }
+.panel-block { display: grid; gap: 14px; }
+.caption, .result-count { margin: 0; color: var(--muted); }
+.tiles, .days { display: grid; gap: 12px; }
+.tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.tile, .day {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px 16px;
+  box-shadow: var(--shadow);
+}
+.tile-count { margin: 0; font-family: var(--serif); font-size: 2rem; line-height: 1; }
+.controls { display: grid; gap: 12px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.search { display: grid; gap: 6px; font-weight: 700; }
+.search input, .field input {
+  width: 100%;
+  font: inherit;
+  font-size: 1rem;
+  min-height: 48px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--input);
+  color: inherit;
+}
+.bot h3, .event h3, .day h3, .day h4 { margin: 0; font-family: var(--serif); }
+.more { margin-top: 10px; }
+.more summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 700; }
+.graph-wrap { overflow-x: auto; background: var(--card); border: 1px solid var(--line); border-radius: 16px; }
+.graph { width: 100%; min-width: 280px; height: auto; }
+.node rect { fill: var(--card); stroke: var(--line); stroke-width: 1.5; }
+.node-active rect { stroke: var(--active); }
+.node-idle rect { stroke: var(--idle); }
+.node-blocked rect { stroke: var(--blocked); }
+.node text, .edge-label, .donut-label { fill: var(--ink); font-family: var(--sans); font-size: 14px; }
+.edge { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.arrow-head { fill: var(--muted); }
+.graph.is-hot .node, .graph.is-hot .edge, .graph.is-hot .edge-label { opacity: 0.28; }
+.graph.is-hot .node.is-on, .graph.is-hot .edge.is-on { opacity: 1; }
+.handoff-list, .feed, .day-list, .bars, .outside { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; }
+.handoff-list li, .event, .day-list li, .bars li {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 12px 14px;
+}
+.handoff-line { margin: 0 0 4px; font-weight: 700; }
+.event { display: grid; grid-template-columns: minmax(9rem, 12rem) 1fr; gap: 12px; }
+.event time, .day-list time { color: var(--muted); font-family: var(--mono); font-size: 0.86rem; }
+.days { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
+.usage-top { display: flex; gap: 18px; align-items: center; }
+.donut { width: 132px; height: 132px; flex: none; }
+.donut-track { fill: none; stroke: var(--line); stroke-width: 10; }
+.donut-arc { fill: none; stroke: var(--accent); stroke-width: 10; stroke-linecap: round; }
+.donut-arc.is-over { stroke: var(--blocked); }
+.usage-figure { margin: 0; font-family: var(--serif); font-size: 1.6rem; }
+.over { margin: 6px 0 0; color: var(--blocked); font-weight: 700; }
+.bar { width: 100%; height: 10px; display: block; }
+.bar-track { fill: var(--line); }
+.bar-fill { fill: var(--accent); }
+.bar-label { display: flex; justify-content: space-between; gap: 12px; margin: 0 0 6px; }
+.panel-host:focus { outline: none; }
+.panel-host:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 800px) {
+  .tiles, .days { grid-template-columns: 1fr; }
+  .event { grid-template-columns: 1fr; }
+  .graph-wrap { display: none; }
+}
+</style>
 </head>
 <body>
   <a class="skip" href="#content">Skip to content</a>

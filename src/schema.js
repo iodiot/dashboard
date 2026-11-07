@@ -1,12 +1,19 @@
 import { LIMITS } from './limits.js';
 import { DashboardError } from './errors.js';
+import { isIanaTimeZone } from './time.js';
 
 const ISO_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/;
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const ROOT_KEYS = new Set(['schemaVersion', 'updatedAt', 'title', 'note', 'bots']);
+const ROOT_KEYS = new Set(['schemaVersion', 'updatedAt', 'title', 'note', 'timezone', 'bots', 'events', 'calendar', 'usage', 'handoffs']);
 const BOT_KEYS = new Set(['id', 'name', 'status', 'summary', 'nextAction', 'updatedAt', 'details', 'tags', 'links']);
 const LINK_KEYS = new Set(['label', 'url']);
+const EVENT_KEYS = new Set(['id', 'at', 'category', 'title', 'summary', 'botId', 'url']);
+const CALENDAR_KEYS = new Set(['id', 'startsAt', 'title', 'endsAt', 'summary', 'where', 'botId', 'url']);
+const USAGE_KEYS = new Set(['used', 'limit', 'resetAt', 'byBot', 'unit']);
+const BY_BOT_KEYS = new Set(['botId', 'used', 'limit']);
+const HANDOFF_KEYS = new Set(['id', 'from', 'to', 'what']);
 const STATUSES = new Set(['active', 'idle', 'blocked']);
+const CATEGORIES = new Set(['application', 'recruiter', 'social', 'calendar']);
 
 function fail(path) {
   throw new DashboardError('schema', `Invalid dashboard JSON: ${path}`);
@@ -181,6 +188,192 @@ function sanitizeBot(value, path, ids) {
   return bot;
 }
 
+function requireSlug(value, path, ids) {
+  const id = requireString(value, path, {
+    min: 1,
+    max: LIMITS.maxIdLength,
+    allowNewlines: false,
+    allowEmpty: false
+  });
+  if (!SLUG_RE.test(id)) fail(path);
+  if (ids) {
+    if (ids.has(id)) fail(path);
+    ids.add(id);
+  }
+  return id;
+}
+
+function requireAmount(value, path) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > LIMITS.maxCount) fail(path);
+  return value;
+}
+
+function knownBot(id, path, botIds) {
+  if (!botIds.has(id)) fail(path);
+  return id;
+}
+
+function optionalUrl(value, path) {
+  const url = normalizeHttpUrl(value);
+  if (url === null) fail(path);
+  return url;
+}
+
+function instant(iso) {
+  return Date.parse(iso);
+}
+
+function sanitizeEvents(value, botIds) {
+  if (!Array.isArray(value) || value.length > LIMITS.maxEvents) fail('events');
+  const ids = new Set();
+  return value.map((item, index) => {
+    const path = `events[${index}]`;
+    if (!isObject(item)) fail(path);
+    rejectUnknown(item, EVENT_KEYS, path);
+    for (const key of ['id', 'at', 'category', 'title']) {
+      if (!Object.hasOwn(item, key)) fail(`${path}.${key}`);
+    }
+    const event = {
+      id: requireSlug(item.id, `${path}.id`, ids),
+      at: item.at,
+      category: item.category,
+      title: requireString(item.title, `${path}.title`, {
+        min: 1,
+        max: LIMITS.maxEventTitle,
+        allowNewlines: false,
+        allowEmpty: false
+      })
+    };
+    if (!isIsoDateTime(event.at)) fail(`${path}.at`);
+    if (!CATEGORIES.has(event.category)) fail(`${path}.category`);
+    if (Object.hasOwn(item, 'summary')) {
+      event.summary = requireString(item.summary, `${path}.summary`, {
+        min: 1,
+        max: LIMITS.maxEventSummary,
+        allowNewlines: true,
+        allowEmpty: false
+      });
+    }
+    if (Object.hasOwn(item, 'botId')) {
+      event.botId = knownBot(requireSlug(item.botId, `${path}.botId`), `${path}.botId`, botIds);
+    }
+    if (Object.hasOwn(item, 'url')) event.url = optionalUrl(item.url, `${path}.url`);
+    return event;
+  });
+}
+
+function sanitizeCalendar(value, botIds) {
+  if (!Array.isArray(value) || value.length > LIMITS.maxCalendar) fail('calendar');
+  const ids = new Set();
+  return value.map((item, index) => {
+    const path = `calendar[${index}]`;
+    if (!isObject(item)) fail(path);
+    rejectUnknown(item, CALENDAR_KEYS, path);
+    for (const key of ['id', 'startsAt', 'title']) {
+      if (!Object.hasOwn(item, key)) fail(`${path}.${key}`);
+    }
+    const entry = {
+      id: requireSlug(item.id, `${path}.id`, ids),
+      startsAt: item.startsAt,
+      title: requireString(item.title, `${path}.title`, {
+        min: 1,
+        max: LIMITS.maxEventTitle,
+        allowNewlines: false,
+        allowEmpty: false
+      })
+    };
+    if (!isIsoDateTime(entry.startsAt)) fail(`${path}.startsAt`);
+    if (Object.hasOwn(item, 'endsAt')) {
+      if (!isIsoDateTime(item.endsAt)) fail(`${path}.endsAt`);
+      if (instant(item.endsAt) < instant(entry.startsAt)) fail(`${path}.endsAt`);
+      entry.endsAt = item.endsAt;
+    }
+    if (Object.hasOwn(item, 'summary')) {
+      entry.summary = requireString(item.summary, `${path}.summary`, {
+        min: 1,
+        max: LIMITS.maxEventSummary,
+        allowNewlines: true,
+        allowEmpty: false
+      });
+    }
+    if (Object.hasOwn(item, 'where')) {
+      entry.where = requireString(item.where, `${path}.where`, {
+        min: 1,
+        max: LIMITS.maxWhereLength,
+        allowNewlines: false,
+        allowEmpty: false
+      });
+    }
+    if (Object.hasOwn(item, 'botId')) {
+      entry.botId = knownBot(requireSlug(item.botId, `${path}.botId`), `${path}.botId`, botIds);
+    }
+    if (Object.hasOwn(item, 'url')) entry.url = optionalUrl(item.url, `${path}.url`);
+    return entry;
+  });
+}
+
+function sanitizeUsage(value, botIds) {
+  if (!isObject(value)) fail('usage');
+  rejectUnknown(value, USAGE_KEYS, 'usage');
+  for (const key of ['used', 'limit', 'resetAt', 'byBot']) {
+    if (!Object.hasOwn(value, key)) fail(`usage.${key}`);
+  }
+  const used = requireAmount(value.used, 'usage.used');
+  const limit = requireAmount(value.limit, 'usage.limit');
+  if (!isIsoDateTime(value.resetAt)) fail('usage.resetAt');
+  if (!Array.isArray(value.byBot) || value.byBot.length > LIMITS.maxBots) fail('usage.byBot');
+  const seen = new Set();
+  const byBot = value.byBot.map((item, index) => {
+    const path = `usage.byBot[${index}]`;
+    if (!isObject(item)) fail(path);
+    rejectUnknown(item, BY_BOT_KEYS, path);
+    if (!Object.hasOwn(item, 'botId') || !Object.hasOwn(item, 'used')) fail(path);
+    const row = {
+      botId: knownBot(requireSlug(item.botId, `${path}.botId`), `${path}.botId`, botIds),
+      used: requireAmount(item.used, `${path}.used`)
+    };
+    if (seen.has(row.botId)) fail(`${path}.botId`);
+    seen.add(row.botId);
+    if (Object.hasOwn(item, 'limit')) row.limit = requireAmount(item.limit, `${path}.limit`);
+    return row;
+  });
+  const usage = { used, limit, resetAt: value.resetAt, byBot };
+  if (Object.hasOwn(value, 'unit')) {
+    usage.unit = requireString(value.unit, 'usage.unit', {
+      min: 1,
+      max: LIMITS.maxUnitLength,
+      allowNewlines: false,
+      allowEmpty: false
+    });
+  }
+  return usage;
+}
+
+function sanitizeHandoffs(value, botIds) {
+  if (!Array.isArray(value) || value.length > LIMITS.maxHandoffs) fail('handoffs');
+  const ids = new Set();
+  return value.map((item, index) => {
+    const path = `handoffs[${index}]`;
+    if (!isObject(item)) fail(path);
+    rejectUnknown(item, HANDOFF_KEYS, path);
+    for (const key of ['from', 'to', 'what']) {
+      if (!Object.hasOwn(item, key)) fail(`${path}.${key}`);
+    }
+    const handoff = {
+      from: knownBot(requireSlug(item.from, `${path}.from`), `${path}.from`, botIds),
+      to: knownBot(requireSlug(item.to, `${path}.to`), `${path}.to`, botIds),
+      what: requireString(item.what, `${path}.what`, {
+        min: 1,
+        max: LIMITS.maxHandoffWhat,
+        allowNewlines: false,
+        allowEmpty: false
+      })
+    };
+    if (Object.hasOwn(item, 'id')) handoff.id = requireSlug(item.id, `${path}.id`, ids);
+    return handoff;
+  });
+}
+
 export function validateDashboard(value) {
   if (!isObject(value)) fail('root');
   rejectUnknown(value, ROOT_KEYS, 'root');
@@ -212,6 +405,14 @@ export function validateDashboard(value) {
       allowEmpty: false
     });
   }
+  if (Object.hasOwn(value, 'timezone')) {
+    if (!isIanaTimeZone(value.timezone)) fail('timezone');
+    dashboard.timezone = value.timezone;
+  }
+  if (Object.hasOwn(value, 'events')) dashboard.events = sanitizeEvents(value.events, ids);
+  if (Object.hasOwn(value, 'calendar')) dashboard.calendar = sanitizeCalendar(value.calendar, ids);
+  if (Object.hasOwn(value, 'usage')) dashboard.usage = sanitizeUsage(value.usage, ids);
+  if (Object.hasOwn(value, 'handoffs')) dashboard.handoffs = sanitizeHandoffs(value.handoffs, ids);
   return dashboard;
 }
 
@@ -222,6 +423,7 @@ export function canonicalizeDashboard(dashboard) {
     title: dashboard.title
   };
   if (Object.hasOwn(dashboard, 'note')) root.note = dashboard.note;
+  if (Object.hasOwn(dashboard, 'timezone')) root.timezone = dashboard.timezone;
   root.bots = dashboard.bots.map((bot) => {
     const copy = {
       id: bot.id,
@@ -236,5 +438,45 @@ export function canonicalizeDashboard(dashboard) {
     copy.links = bot.links.map((link) => ({ label: link.label, url: link.url }));
     return copy;
   });
+  if (Object.hasOwn(dashboard, 'events')) {
+    root.events = dashboard.events.map((item) => {
+      const copy = { id: item.id, at: item.at, category: item.category, title: item.title };
+      if (Object.hasOwn(item, 'summary')) copy.summary = item.summary;
+      if (Object.hasOwn(item, 'botId')) copy.botId = item.botId;
+      if (Object.hasOwn(item, 'url')) copy.url = item.url;
+      return copy;
+    });
+  }
+  if (Object.hasOwn(dashboard, 'calendar')) {
+    root.calendar = dashboard.calendar.map((item) => {
+      const copy = { id: item.id, startsAt: item.startsAt, title: item.title };
+      if (Object.hasOwn(item, 'endsAt')) copy.endsAt = item.endsAt;
+      if (Object.hasOwn(item, 'summary')) copy.summary = item.summary;
+      if (Object.hasOwn(item, 'where')) copy.where = item.where;
+      if (Object.hasOwn(item, 'botId')) copy.botId = item.botId;
+      if (Object.hasOwn(item, 'url')) copy.url = item.url;
+      return copy;
+    });
+  }
+  if (Object.hasOwn(dashboard, 'usage')) {
+    root.usage = {
+      used: dashboard.usage.used,
+      limit: dashboard.usage.limit,
+      resetAt: dashboard.usage.resetAt,
+      byBot: dashboard.usage.byBot.map((item) => {
+        const copy = { botId: item.botId, used: item.used };
+        if (Object.hasOwn(item, 'limit')) copy.limit = item.limit;
+        return copy;
+      })
+    };
+    if (Object.hasOwn(dashboard.usage, 'unit')) root.usage.unit = dashboard.usage.unit;
+  }
+  if (Object.hasOwn(dashboard, 'handoffs')) {
+    root.handoffs = dashboard.handoffs.map((item) => {
+      const copy = { from: item.from, to: item.to, what: item.what };
+      if (Object.hasOwn(item, 'id')) copy.id = item.id;
+      return copy;
+    });
+  }
   return JSON.stringify(root);
 }
