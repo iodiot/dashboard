@@ -24,5 +24,13 @@ export const LIMITS = {
   maxNoteLength: 280,
   maxNextActionLength: 300,
   maxLabelLength: 80,
-  maxUrlLength: 2000
+  maxUrlLength: 2000,
+  maxEvents: 200,
+  maxCalendar: 100,
+  maxHandoffs: 200,
+  maxEventTitle: 120,
+  maxEventSummary: 500,
+  maxHandoffWhat: 200,
+  maxWhereLength: 120,
+  maxCount: 1_000_000_000_000
 };
